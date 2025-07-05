@@ -576,5 +576,206 @@ def main():
             - Mobile-friendly design
             """)
 
+# Gold Mining Analysis Functions
+def calculate_conviction_momentum(stock_conviction):
+    """Find stocks gaining momentum across schemes"""
+    # Calculate momentum score based on scheme adoption rate
+    stock_conviction_copy = stock_conviction.copy()
+    stock_conviction_copy['Momentum_Score'] = (
+        stock_conviction_copy['Scheme_Count'] / stock_conviction_copy['Total_Appearances']
+    ) * 100
+    
+    # Identify emerging winners
+    emerging_winners = stock_conviction_copy[
+        (stock_conviction_copy['Conviction_Score'] >= 30) & 
+        (stock_conviction_copy['Momentum_Score'] >= 80)
+    ]
+    
+    return emerging_winners
+
+def find_hidden_gems(processed_df, stock_conviction, scheme_col, stock_col):
+    """Find undervalued high-conviction picks"""
+    
+    # Stocks held by quality schemes but not mainstream
+    quality_schemes = processed_df.groupby(scheme_col).size().sort_values(ascending=False).head(10).index
+    
+    hidden_gems = []
+    for stock in stock_conviction['Stock']:
+        stock_schemes = processed_df[processed_df[stock_col] == stock][scheme_col].unique()
+        
+        # Check if held by quality schemes but low overall conviction
+        quality_holdings = len([s for s in stock_schemes if s in quality_schemes])
+        conviction_score = stock_conviction[stock_conviction['Stock'] == stock]['Conviction_Score'].iloc[0]
+        
+        if quality_holdings >= 3 and conviction_score < 40:
+            hidden_gems.append({
+                'Stock': stock,
+                'Quality_Scheme_Count': quality_holdings,
+                'Conviction_Score': conviction_score,
+                'Gem_Score': (quality_holdings / conviction_score) * 100 if conviction_score > 0 else 0
+            })
+    
+    return pd.DataFrame(hidden_gems).sort_values('Gem_Score', ascending=False)
+
+def detect_consensus_breakouts(stock_conviction, threshold=25):
+    """Identify stocks crossing conviction thresholds"""
+    
+    breakout_stocks = stock_conviction[
+        (stock_conviction['Conviction_Score'] >= threshold) &
+        (stock_conviction['Scheme_Count'] >= 4)
+    ].copy()
+    
+    # Calculate breakout strength
+    breakout_stocks['Breakout_Strength'] = (
+        breakout_stocks['Conviction_Score'] * 
+        breakout_stocks['Scheme_Count']
+    ) / 100
+    
+    return breakout_stocks.sort_values('Breakout_Strength', ascending=False)
+
+def track_smart_money(processed_df, stock_conviction, scheme_col, stock_col):
+    """Identify which schemes are consistently picking winners"""
+    
+    scheme_performance = {}
+    
+    for scheme in processed_df[scheme_col].unique():
+        scheme_stocks = processed_df[processed_df[scheme_col] == scheme][stock_col].unique()
+        
+        # Calculate scheme's stock selection quality
+        total_conviction = 0
+        for stock in scheme_stocks:
+            stock_conviction_score = stock_conviction[
+                stock_conviction['Stock'] == stock
+            ]['Conviction_Score'].iloc[0] if len(stock_conviction[stock_conviction['Stock'] == stock]) > 0 else 0
+            total_conviction += stock_conviction_score
+        
+        avg_conviction = total_conviction / len(scheme_stocks) if len(scheme_stocks) > 0 else 0
+        
+        scheme_performance[scheme] = {
+            'Holdings_Count': len(scheme_stocks),
+            'Avg_Conviction': avg_conviction,
+            'Smart_Money_Score': avg_conviction * len(scheme_stocks) / 100
+        }
+    
+    return pd.DataFrame(scheme_performance).T.sort_values('Smart_Money_Score', ascending=False)
+
+def create_consensus_portfolio(stock_conviction, top_n=20, min_conviction=30):
+    """Create optimal portfolio based on fund manager consensus"""
+    
+    consensus_picks = stock_conviction[
+        stock_conviction['Conviction_Score'] >= min_conviction
+    ].head(top_n)
+    
+    # Calculate optimal weights based on conviction
+    total_conviction = consensus_picks['Conviction_Score'].sum()
+    consensus_picks = consensus_picks.copy()
+    consensus_picks['Optimal_Weight'] = (
+        consensus_picks['Conviction_Score'] / total_conviction * 100
+    ).round(2)
+    
+    return consensus_picks[['Stock', 'Conviction_Score', 'Scheme_Count', 'Optimal_Weight']]
+
+def identify_risk_flags(processed_df, stock_conviction, scheme_col, stock_col):
+    """Identify potential risk situations"""
+    
+    risk_flags = []
+    
+    # Over-concentration risk
+    total_holdings = len(processed_df)
+    for _, row in stock_conviction.iterrows():
+        stock = row['Stock']
+        stock_weight = (row['Total_Appearances'] / total_holdings) * 100
+        
+        if stock_weight > 15:  # More than 15% of all holdings
+            risk_flags.append({
+                'Stock': stock,
+                'Risk_Type': 'Over-Concentration',
+                'Risk_Level': 'HIGH' if stock_weight > 25 else 'MEDIUM',
+                'Details': f'{stock_weight:.1f}% of all holdings'
+            })
+    
+    # Herd mentality risk
+    high_conviction_stocks = stock_conviction[stock_conviction['Conviction_Score'] > 70]
+    if len(high_conviction_stocks) > 5:
+        risk_flags.append({
+            'Stock': 'PORTFOLIO',
+            'Risk_Type': 'Herd Mentality',
+            'Risk_Level': 'MEDIUM',
+            'Details': f'{len(high_conviction_stocks)} stocks with >70% conviction'
+        })
+    
+    return pd.DataFrame(risk_flags)
+
+def optimize_diversification(processed_df, stock_conviction, scheme_col, stock_col):
+    """Find optimal diversification opportunities"""
+    
+    # Find underrepresented quality stocks
+    underrepresented = stock_conviction[
+        (stock_conviction['Conviction_Score'] >= 20) &
+        (stock_conviction['Conviction_Score'] <= 40) &
+        (stock_conviction['Scheme_Count'] >= 3)
+    ]
+    
+    return underrepresented.sort_values('Conviction_Score', ascending=False)
+
+# Function to create enhanced visualizations
+def create_enhanced_visualizations(stock_conviction, df, scheme_col, stock_col, min_schemes):
+    """Create enhanced interactive visualizations"""
+    
+    # Filter based on minimum schemes
+    filtered_conviction = stock_conviction[stock_conviction['Scheme_Count'] >= min_schemes].copy()
+    
+    # 1. High Conviction Stocks Bar Chart
+    fig_conviction = px.bar(
+        filtered_conviction.head(20),
+        x='Conviction_Score',
+        y='Stock',
+        color='Conviction_Category',
+        title=f"🎯 Top 20 High Conviction Stocks (Min {min_schemes} Schemes)",
+        labels={'Conviction_Score': 'Conviction Score (%)', 'Stock': 'Stock'},
+        color_discrete_map={
+            "🟢 High Conviction": "#38ef7d",
+            "🟡 Medium Conviction": "#f5576c", 
+            "🔵 Low Conviction": "#4facfe"
+        }
+    )
+    fig_conviction.update_layout(yaxis={'categoryorder': 'total ascending'})
+    
+    # 2. Conviction Distribution
+    conviction_dist = filtered_conviction['Conviction_Category'].value_counts()
+    fig_dist = px.pie(
+        values=conviction_dist.values,
+        names=conviction_dist.index,
+        title=f"🎯 Conviction Distribution (Min {min_schemes} Schemes)",
+        color_discrete_map={
+            "🟢 High Conviction": "#38ef7d",
+            "🟡 Medium Conviction": "#f5576c",
+            "🔵 Low Conviction": "#4facfe"
+        }
+    )
+    
+    # 3. Scheme Overlap Heatmap
+    schemes = df[scheme_col].unique()
+    overlap_matrix = pd.DataFrame(index=schemes, columns=schemes)
+    
+    for scheme1 in schemes:
+        stocks1 = set(df[df[scheme_col] == scheme1][stock_col])
+        for scheme2 in schemes:
+            stocks2 = set(df[df[scheme_col] == scheme2][stock_col])
+            overlap = len(stocks1.intersection(stocks2))
+            overlap_matrix.loc[scheme1, scheme2] = overlap
+    
+    overlap_matrix = overlap_matrix.astype(float)
+    
+    fig_heatmap = px.imshow(
+        overlap_matrix,
+        title="🔄 Portfolio Convergence Heatmap",
+        labels=dict(x="Scheme", y="Scheme", color="Common Stocks"),
+        aspect="auto",
+        color_continuous_scale="Viridis"
+    )
+    
+    return fig_conviction, fig_dist, fig_heatmap, filtered_conviction
+
 if __name__ == "__main__":
     main()
