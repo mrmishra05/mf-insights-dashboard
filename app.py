@@ -73,67 +73,9 @@ def load_consolidated_data(sheets_url):
         st.error(f"Error loading data: {e}")
         return None
 
-# Function to get market cap from Yahoo Finance
-@st.cache_data(ttl=3600)  # Cache for 1 hour
-def get_market_cap_yfinance(company_name):
-    """Get market cap from Yahoo Finance"""
-    try:
-        if pd.isna(company_name) or company_name == "":
-            return None
-            
-        variations = [
-            company_name,
-            company_name.replace(" Ltd.", ""),
-            company_name.replace(" Limited", ""),
-            company_name.replace("Ltd.", ""),
-            company_name.replace("Limited", ""),
-            company_name.split()[0] if len(company_name.split()) > 1 else company_name
-        ]
-        
-        for variation in variations:
-            try:
-                # Try with .NS suffix for NSE
-                ticker_ns = f"{variation.upper().replace(' ', '').replace('.', '')}.NS"
-                stock = yf.Ticker(ticker_ns)
-                info = stock.info
-                
-                if 'marketCap' in info and info['marketCap']:
-                    return info['marketCap']
-                
-                # Try with .BO suffix for BSE
-                ticker_bo = f"{variation.upper().replace(' ', '').replace('.', '')}.BO"
-                stock = yf.Ticker(ticker_bo)
-                info = stock.info
-                
-                if 'marketCap' in info and info['marketCap']:
-                    return info['marketCap']
-                    
-            except:
-                continue
-                
-        return None
-    except Exception as e:
-        return None
-
-# Function to categorize market cap
-def categorize_market_cap(market_cap_value):
-    """Categorize market cap based on SEBI definitions"""
-    if market_cap_value is None:
-        return "Unknown"
-    
-    # Convert USD to INR (approximate rate)
-    market_cap_inr_crores = (market_cap_value * 83) / 10000000
-    
-    if market_cap_inr_crores >= 20000:
-        return "Large Cap"
-    elif market_cap_inr_crores >= 5000:
-        return "Mid Cap"
-    else:
-        return "Small Cap"
-
-# Function to process consolidated data
-def process_consolidated_data(df):
-    """Process consolidated data and add market cap information"""
+# Function to process consolidated data without market cap fetching
+def process_consolidated_data_basic(df):
+    """Process consolidated data without market cap information"""
     if df is None or df.empty:
         return None
     
@@ -158,38 +100,9 @@ def process_consolidated_data(df):
         st.error("Could not identify scheme and stock columns. Please check your data structure.")
         return None
     
-    # Get unique stocks for market cap fetching
-    unique_stocks = df[stock_col].dropna().unique()
-    
-    # Progress bar for market cap fetching
-    progress_bar = st.progress(0)
-    status_text = st.empty()
-    
-    stock_market_caps = {}
-    
-    for i, stock in enumerate(unique_stocks):
-        status_text.text(f"Fetching market cap for {stock}... ({i+1}/{len(unique_stocks)})")
-        progress_bar.progress((i + 1) / len(unique_stocks))
-        
-        market_cap = get_market_cap_yfinance(stock)
-        stock_market_caps[stock] = {
-            'market_cap': market_cap,
-            'category': categorize_market_cap(market_cap)
-        }
-        
-        time.sleep(0.1)  # Small delay to avoid rate limiting
-    
-    progress_bar.empty()
-    status_text.empty()
-    
-    # Add market cap information to dataframe
+    # Add placeholder market cap columns
     processed_df = df.copy()
-    processed_df['Market_Cap_USD'] = processed_df[stock_col].map(
-        lambda x: stock_market_caps.get(x, {}).get('market_cap')
-    )
-    processed_df['Market_Cap_Category'] = processed_df[stock_col].map(
-        lambda x: stock_market_caps.get(x, {}).get('category')
-    )
+    processed_df['Market_Cap_Category'] = 'Not Available'
     
     return processed_df, scheme_col, stock_col
 
@@ -204,20 +117,18 @@ def create_comprehensive_analysis(df, scheme_col, stock_col):
     
     # Scheme-wise statistics
     scheme_stats = df.groupby(scheme_col).agg({
-        stock_col: 'count',
-        'Market_Cap_Category': lambda x: x.value_counts().to_dict()
+        stock_col: 'count'
     }).reset_index()
-    scheme_stats.columns = ['Scheme', 'Total_Holdings', 'Market_Cap_Distribution']
+    scheme_stats.columns = ['Scheme', 'Total_Holdings']
     
     # Stock-wise statistics (which stocks appear in multiple schemes)
     stock_stats = df.groupby(stock_col).agg({
-        scheme_col: ['count', 'nunique', list],
-        'Market_Cap_Category': 'first'
+        scheme_col: ['count', 'nunique', list]
     }).reset_index()
-    stock_stats.columns = ['Stock', 'Total_Appearances', 'Unique_Schemes', 'Scheme_List', 'Market_Cap_Category']
+    stock_stats.columns = ['Stock', 'Total_Appearances', 'Unique_Schemes', 'Scheme_List']
     stock_stats = stock_stats.sort_values('Unique_Schemes', ascending=False)
     
-    # Market cap distribution
+    # Market cap distribution (will show "Not Available" for all)
     market_cap_dist = df['Market_Cap_Category'].value_counts()
     
     # Scheme overlap analysis
@@ -239,14 +150,7 @@ def create_comprehensive_analysis(df, scheme_col, stock_col):
 def create_visualizations(analysis_results, df, scheme_col, stock_col):
     """Create various visualizations"""
     
-    # 1. Market Cap Distribution
-    fig_market_cap = px.pie(
-        values=analysis_results['market_cap_dist'].values,
-        names=analysis_results['market_cap_dist'].index,
-        title="Market Cap Distribution Across All Holdings"
-    )
-    
-    # 2. Scheme-wise Holdings Count
+    # 1. Scheme-wise Holdings Count
     scheme_counts = df.groupby(scheme_col).size().reset_index(name='Holdings_Count')
     fig_scheme_holdings = px.bar(
         scheme_counts,
@@ -257,7 +161,7 @@ def create_visualizations(analysis_results, df, scheme_col, stock_col):
     )
     fig_scheme_holdings.update_layout(yaxis={'categoryorder': 'total ascending'})
     
-    # 3. Common Stocks Analysis
+    # 2. Common Stocks Analysis
     common_stocks = analysis_results['stock_stats'][
         analysis_results['stock_stats']['Unique_Schemes'] > 1
     ].head(20)
@@ -271,22 +175,19 @@ def create_visualizations(analysis_results, df, scheme_col, stock_col):
     )
     fig_common_stocks.update_layout(yaxis={'categoryorder': 'total ascending'})
     
-    # 4. Scheme-wise Market Cap Distribution
-    scheme_market_cap = df.groupby([scheme_col, 'Market_Cap_Category']).size().reset_index(name='Count')
-    fig_scheme_market_cap = px.bar(
-        scheme_market_cap,
-        x=scheme_col,
-        y='Count',
-        color='Market_Cap_Category',
-        title="Market Cap Distribution by Scheme"
+    # 3. Holdings distribution
+    holdings_dist = df.groupby(scheme_col).size().reset_index(name='Count')
+    fig_holdings_dist = px.pie(
+        holdings_dist,
+        values='Count',
+        names=scheme_col,
+        title="Holdings Distribution Across Schemes"
     )
-    fig_scheme_market_cap.update_xaxes(tickangle=45)
     
     return {
-        'market_cap_dist': fig_market_cap,
         'scheme_holdings': fig_scheme_holdings,
         'common_stocks': fig_common_stocks,
-        'scheme_market_cap': fig_scheme_market_cap
+        'holdings_dist': fig_holdings_dist
     }
 
 # Main app logic
@@ -297,55 +198,52 @@ def main():
             df = load_consolidated_data(google_sheets_url)
             
             if df is not None and not df.empty:
-                st.session_state['raw_data'] = df
-                st.success(f"✅ Successfully loaded {len(df)} rows from consolidated sheet")
-                
-                # Show data preview
-                st.subheader("📄 Data Preview")
-                st.dataframe(df.head(10), use_container_width=True)
-                
-                # Show column information
-                st.subheader("📋 Column Information")
-                col_info = []
-                for col in df.columns:
-                    col_info.append({
-                        'Column': col,
-                        'Type': str(df[col].dtype),
-                        'Non-Null Count': df[col].notna().sum(),
-                        'Unique Values': df[col].nunique()
-                    })
-                st.dataframe(pd.DataFrame(col_info), use_container_width=True)
-                
+                # Automatically process the data
+                with st.spinner("Processing data..."):
+                    result = process_consolidated_data_basic(df)
+                    
+                    if result is not None:
+                        processed_df, scheme_col, stock_col = result
+                        st.session_state['processed_data'] = processed_df
+                        st.session_state['scheme_col'] = scheme_col
+                        st.session_state['stock_col'] = stock_col
+                        st.session_state['raw_data'] = df
+                        
+                        st.success(f"✅ Successfully loaded and processed {len(df)} rows from consolidated sheet")
+                        
+                        # Show data preview
+                        st.subheader("📄 Data Preview")
+                        st.dataframe(df.head(10), use_container_width=True)
+                        
+                        # Show column information
+                        st.subheader("📋 Column Information")
+                        col_info = []
+                        for col in df.columns:
+                            col_info.append({
+                                'Column': col,
+                                'Type': str(df[col].dtype),
+                                'Non-Null Count': df[col].notna().sum(),
+                                'Unique Values': df[col].nunique()
+                            })
+                        st.dataframe(pd.DataFrame(col_info), use_container_width=True)
+                        
+                        # Show processing summary
+                        st.subheader("🔄 Processing Summary")
+                        col1, col2, col3 = st.columns(3)
+                        
+                        with col1:
+                            st.metric("Scheme Column", scheme_col)
+                        with col2:
+                            st.metric("Stock Column", stock_col)
+                        with col3:
+                            st.metric("Total Entries", len(processed_df))
+                        
+                        # Automatically trigger rerun to show the dashboard
+                        st.rerun()
+                    else:
+                        st.error("❌ Failed to process data. Please check your data structure.")
             else:
                 st.error("❌ Failed to load data. Please check your Google Sheets URL.")
-    
-    # Process data if available
-    if 'raw_data' in st.session_state:
-        df = st.session_state['raw_data']
-        
-        # Process data button
-        if st.sidebar.button("Process Data & Fetch Market Cap", type="secondary"):
-            with st.spinner("Processing data and fetching market cap information..."):
-                result = process_consolidated_data(df)
-                
-                if result is not None:
-                    processed_df, scheme_col, stock_col = result
-                    st.session_state['processed_data'] = processed_df
-                    st.session_state['scheme_col'] = scheme_col
-                    st.session_state['stock_col'] = stock_col
-                    st.success("✅ Data processed successfully!")
-                    
-                    # Show processing summary
-                    st.subheader("🔄 Processing Summary")
-                    col1, col2, col3 = st.columns(3)
-                    
-                    with col1:
-                        st.metric("Scheme Column", scheme_col)
-                    with col2:
-                        st.metric("Stock Column", stock_col)
-                    with col3:
-                        market_cap_added = processed_df['Market_Cap_USD'].notna().sum()
-                        st.metric("Market Cap Found", f"{market_cap_added}/{len(processed_df)}")
     
     # Display analysis if processed data is available
     if 'processed_data' in st.session_state:
@@ -359,11 +257,10 @@ def main():
             visualizations = create_visualizations(analysis_results, processed_df, scheme_col, stock_col)
         
         # Display results in tabs
-        tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+        tab1, tab2, tab3, tab4, tab5 = st.tabs([
             "📊 Overview",
             "🔍 Scheme Analysis", 
             "🤝 Common Holdings",
-            "📈 Market Cap Analysis",
             "🔄 Cross-Scheme Analysis",
             "📋 Raw Data"
         ])
@@ -386,8 +283,8 @@ def main():
                 ])
                 st.metric("Common Stocks", common_stocks_count)
             
-            # Market cap distribution
-            st.plotly_chart(visualizations['market_cap_dist'], use_container_width=True)
+            # Holdings distribution
+            st.plotly_chart(visualizations['holdings_dist'], use_container_width=True)
             
             # Scheme holdings
             st.plotly_chart(visualizations['scheme_holdings'], use_container_width=True)
@@ -410,22 +307,13 @@ def main():
                 with col1:
                     st.metric("Total Holdings", len(scheme_data))
                 with col2:
-                    small_mid_cap = len(scheme_data[
-                        scheme_data['Market_Cap_Category'].isin(['Small Cap', 'Mid Cap'])
-                    ])
-                    st.metric("Small & Mid Cap", small_mid_cap)
+                    st.metric("Unique Stocks", scheme_data[stock_col].nunique())
                 with col3:
-                    large_cap = len(scheme_data[scheme_data['Market_Cap_Category'] == 'Large Cap'])
-                    st.metric("Large Cap", large_cap)
-                
-                # Scheme-specific market cap distribution
-                scheme_cap_dist = scheme_data['Market_Cap_Category'].value_counts()
-                fig_scheme_cap = px.pie(
-                    values=scheme_cap_dist.values,
-                    names=scheme_cap_dist.index,
-                    title=f"Market Cap Distribution - {selected_scheme}"
-                )
-                st.plotly_chart(fig_scheme_cap, use_container_width=True)
+                    # Count how many of this scheme's stocks appear in other schemes
+                    scheme_stocks = set(scheme_data[stock_col])
+                    other_schemes_stocks = set(processed_df[processed_df[scheme_col] != selected_scheme][stock_col])
+                    common_with_others = len(scheme_stocks.intersection(other_schemes_stocks))
+                    st.metric("Stocks in Other Schemes", common_with_others)
                 
                 # Holdings table
                 st.markdown("#### Holdings Details")
@@ -450,29 +338,12 @@ def main():
                     lambda x: ', '.join(x) if isinstance(x, list) else str(x)
                 )
                 
-                display_df = common_stocks_df[['Stock', 'Unique_Schemes', 'Market_Cap_Category', 'Schemes']]
+                display_df = common_stocks_df[['Stock', 'Unique_Schemes', 'Schemes']]
                 st.dataframe(display_df, use_container_width=True)
             else:
                 st.info("No common stocks found across schemes.")
         
         with tab4:
-            st.markdown("### 📈 Market Cap Analysis")
-            
-            # Market cap distribution by scheme
-            st.plotly_chart(visualizations['scheme_market_cap'], use_container_width=True)
-            
-            # Market cap statistics
-            st.markdown("#### Market Cap Statistics by Scheme")
-            market_cap_stats = processed_df.groupby(scheme_col)['Market_Cap_Category'].value_counts().unstack(fill_value=0)
-            market_cap_stats['Total'] = market_cap_stats.sum(axis=1)
-            
-            # Calculate percentages
-            for col in market_cap_stats.columns[:-1]:
-                market_cap_stats[f'{col}_Pct'] = (market_cap_stats[col] / market_cap_stats['Total'] * 100).round(1)
-            
-            st.dataframe(market_cap_stats, use_container_width=True)
-        
-        with tab5:
             st.markdown("### 🔄 Cross-Scheme Analysis")
             
             # Stock overlap heatmap
@@ -517,7 +388,7 @@ def main():
             overlap_stats_df = pd.DataFrame(overlap_stats).sort_values('Common Stocks', ascending=False)
             st.dataframe(overlap_stats_df, use_container_width=True)
         
-        with tab6:
+        with tab5:
             st.markdown("### 📋 Raw Data")
             
             # Filters
@@ -532,18 +403,21 @@ def main():
                 )
             
             with col2:
-                market_cap_filter = st.multiselect(
-                    "Filter by Market Cap Category:",
-                    processed_df['Market_Cap_Category'].unique(),
-                    default=[]
-                )
+                if stock_col in processed_df.columns:
+                    stock_filter = st.multiselect(
+                        "Filter by Stock:",
+                        processed_df[stock_col].unique()[:50],  # Limit to first 50 for performance
+                        default=[]
+                    )
+                else:
+                    stock_filter = []
             
             # Apply filters
             filtered_df = processed_df.copy()
             if scheme_filter:
                 filtered_df = filtered_df[filtered_df[scheme_col].isin(scheme_filter)]
-            if market_cap_filter:
-                filtered_df = filtered_df[filtered_df['Market_Cap_Category'].isin(market_cap_filter)]
+            if stock_filter:
+                filtered_df = filtered_df[filtered_df[stock_col].isin(stock_filter)]
             
             # Display filtered data
             st.markdown(f"#### Filtered Data ({len(filtered_df)} rows)")
@@ -559,15 +433,15 @@ def main():
             )
     
     else:
-        st.info("👆 Please load and process data using the sidebar buttons.")
+        st.info("👆 Please load your consolidated data using the sidebar button.")
         
         # Instructions
         st.subheader("📖 Instructions")
         st.markdown("""
         ## How to Use This Dashboard
         
-        1. **Load Data**: Click 'Load Consolidated Data' to import your consolidated sheet
-        2. **Process Data**: Click 'Process Data & Fetch Market Cap' to enrich data with market cap information
+        1. **Enter Google Sheets URL**: Paste your consolidated sheet URL in the sidebar
+        2. **Load Data**: Click 'Load Consolidated Data' to import and automatically process your data
         3. **Explore Analysis**: Navigate through different tabs for comprehensive analysis
         
         ## Expected Data Format
@@ -577,8 +451,8 @@ def main():
         - **Additional columns**: Any other relevant data (holdings %, sector, etc.)
         
         ## Features
+        - ✅ **Automatic processing** - No manual steps required
         - ✅ **Automatic column detection** for schemes and stocks
-        - ✅ **Market cap categorization** (Small/Mid/Large Cap)
         - ✅ **Cross-scheme analysis** and overlap detection
         - ✅ **Interactive visualizations** with filtering capabilities
         - ✅ **Data export** functionality
@@ -588,10 +462,20 @@ def main():
         - Portfolio overview with key metrics
         - Individual scheme analysis
         - Common holdings identification
-        - Market cap distribution analysis
         - Cross-scheme overlap heatmap
         - Raw data with filtering options
+        
+        **Note**: Market cap analysis has been disabled for faster processing. Data loads automatically after clicking 'Load Consolidated Data'.
         """)
+
+# Optional: Add market cap fetching as a separate feature
+if 'processed_data' in st.session_state:
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### Optional Features")
+    
+    if st.sidebar.button("🔍 Fetch Market Cap Data", help="This will take time as it fetches market cap for each stock"):
+        # Here you can add the market cap fetching logic if needed
+        st.sidebar.info("Market cap fetching feature can be added here if needed")
 
 if __name__ == "__main__":
     main()
