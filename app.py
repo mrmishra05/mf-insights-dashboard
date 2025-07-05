@@ -25,7 +25,7 @@ st.sidebar.header("Configuration")
 # Google Sheets URL input
 google_sheets_url = st.sidebar.text_input(
     "Google Sheets URL",
-    value="https://docs.google.com/spreadsheets/d/18ItyhpfgMhM0T3aPAxcpaABgl4oNK7Aj/edit?gid=1216092121#gid=1216092121",
+    value="https://docs.google.com/spreadsheets/d/1lXMwJBjmCTKA8RK81fzDwty5IvjQhaDGCZDRkeSqxZc/edit?gid=1477439265#gid=1477439265",
     help="Enter the URL of your Google Sheet containing mutual fund holdings data"
 )
 
