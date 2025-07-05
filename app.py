@@ -1,33 +1,47 @@
 import streamlit as st
 import pandas as pd
-import requests
-import yfinance as yf
-from bs4 import BeautifulSoup
-import time
-import re
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+import time
 
 # Set page configuration
 st.set_page_config(
-    page_title="Consolidated Mutual Fund Analysis Dashboard",
-    page_icon="📊",
+    page_title="🎯 Smart Mutual Fund Analysis Dashboard",
+    page_icon="🎯",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Title and description
-st.title("📊 Consolidated Mutual Fund Analysis Dashboard")
-st.markdown("Analyze and compare holdings across multiple mutual fund schemes from a single consolidated sheet")
+# Custom CSS for better styling
+st.markdown("""
+<style>
+    .metric-card {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        padding: 1rem;
+        border-radius: 10px;
+        color: white;
+        margin: 0.5rem 0;
+    }
+    .conviction-high { background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%); }
+    .conviction-medium { background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); }
+    .conviction-low { background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%); }
+</style>
+""", unsafe_allow_html=True)
+
+# Title with enhanced styling
+st.markdown("""
+# 🎯 Smart Mutual Fund Analysis Dashboard
+### Discover High-Conviction Picks & Portfolio Convergence Insights
+""")
 
 # Sidebar for configuration
-st.sidebar.header("Configuration")
+st.sidebar.header("🎛️ Dashboard Controls")
 
 # Google Sheets URL input
 google_sheets_url = st.sidebar.text_input(
-    "Google Sheets URL",
+    "📊 Google Sheets URL",
     value="https://docs.google.com/spreadsheets/d/1lXMwJBjmCTKA8RK81fzDwty5IvjQhaDGCZDRkeSqxZc/edit?gid=1477439265#gid=1477439265",
     help="Enter the URL of your consolidated Google Sheet"
 )
@@ -38,12 +52,9 @@ def convert_to_csv_url(sheets_url):
     try:
         if '/d/' in sheets_url:
             sheet_id = sheets_url.split('/d/')[1].split('/')[0]
-            
-            # Extract GID if present
-            gid = "0"  # Default GID
+            gid = "0"
             if 'gid=' in sheets_url:
                 gid = sheets_url.split('gid=')[1].split('&')[0].split('#')[0]
-            
             csv_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={gid}"
             return csv_url
         else:
@@ -53,7 +64,7 @@ def convert_to_csv_url(sheets_url):
         return None
 
 # Function to load consolidated data
-@st.cache_data(ttl=300)  # Cache for 5 minutes
+@st.cache_data(ttl=300)
 def load_consolidated_data(sheets_url):
     """Load data from consolidated Google Sheet"""
     try:
@@ -63,337 +74,420 @@ def load_consolidated_data(sheets_url):
         
         df = pd.read_csv(csv_url)
         df.columns = df.columns.str.strip()
-        
-        # Clean data
-        df = df.dropna(how='all')  # Remove completely empty rows
+        df = df.dropna(how='all')
         df = df.reset_index(drop=True)
-        
         return df
     except Exception as e:
         st.error(f"Error loading data: {e}")
         return None
 
-# Function to process consolidated data without market cap fetching
-def process_consolidated_data_basic(df):
-    """Process consolidated data without market cap information"""
+# Enhanced data processing function
+def process_consolidated_data_enhanced(df):
+    """Enhanced processing with conviction analysis"""
     if df is None or df.empty:
         return None
     
-    # Identify the scheme column (assuming it's the first column or named 'Scheme')
+    # Auto-detect columns
     scheme_col = None
     stock_col = None
     
-    # Try to identify columns automatically
     for col in df.columns:
         if 'scheme' in col.lower() or 'fund' in col.lower():
             scheme_col = col
         elif 'stock' in col.lower() or 'company' in col.lower():
             stock_col = col
     
-    # If not found, use the first few columns
     if scheme_col is None and len(df.columns) > 0:
         scheme_col = df.columns[0]
     if stock_col is None and len(df.columns) > 1:
         stock_col = df.columns[1]
     
     if scheme_col is None or stock_col is None:
-        st.error("Could not identify scheme and stock columns. Please check your data structure.")
+        st.error("Could not identify scheme and stock columns.")
         return None
     
-    # Add placeholder market cap columns
+    # Calculate conviction metrics
+    stock_conviction = df.groupby(stock_col).agg({
+        scheme_col: ['count', 'nunique', list]
+    }).reset_index()
+    stock_conviction.columns = ['Stock', 'Total_Appearances', 'Scheme_Count', 'Schemes_List']
+    
+    # Calculate conviction score (percentage of schemes holding this stock)
+    total_schemes = df[scheme_col].nunique()
+    stock_conviction['Conviction_Score'] = (stock_conviction['Scheme_Count'] / total_schemes * 100).round(1)
+    
+    # Categorize conviction levels
+    def get_conviction_category(score):
+        if score >= 50:
+            return "🟢 High Conviction"
+        elif score >= 25:
+            return "🟡 Medium Conviction"
+        else:
+            return "🔵 Low Conviction"
+    
+    stock_conviction['Conviction_Category'] = stock_conviction['Conviction_Score'].apply(get_conviction_category)
+    
+    # Sort by conviction score
+    stock_conviction = stock_conviction.sort_values('Conviction_Score', ascending=False)
+    
     processed_df = df.copy()
     processed_df['Market_Cap_Category'] = 'Not Available'
     
-    return processed_df, scheme_col, stock_col
+    return processed_df, scheme_col, stock_col, stock_conviction, total_schemes
 
-# Function to create comprehensive analysis
-def create_comprehensive_analysis(df, scheme_col, stock_col):
-    """Create comprehensive analysis of the consolidated data"""
-    
-    # Basic statistics
-    total_entries = len(df)
-    unique_schemes = df[scheme_col].nunique()
-    unique_stocks = df[stock_col].nunique()
-    
-    # Scheme-wise statistics
-    scheme_stats = df.groupby(scheme_col).agg({
-        stock_col: 'count'
-    }).reset_index()
-    scheme_stats.columns = ['Scheme', 'Total_Holdings']
-    
-    # Stock-wise statistics (which stocks appear in multiple schemes)
-    stock_stats = df.groupby(stock_col).agg({
-        scheme_col: ['count', 'nunique', list]
-    }).reset_index()
-    stock_stats.columns = ['Stock', 'Total_Appearances', 'Unique_Schemes', 'Scheme_List']
-    stock_stats = stock_stats.sort_values('Unique_Schemes', ascending=False)
-    
-    # Market cap distribution (will show "Not Available" for all)
-    market_cap_dist = df['Market_Cap_Category'].value_counts()
-    
-    # Scheme overlap analysis
-    scheme_overlap = df.groupby([scheme_col, stock_col]).size().reset_index(name='Count')
-    
-    return {
-        'basic_stats': {
-            'total_entries': total_entries,
-            'unique_schemes': unique_schemes,
-            'unique_stocks': unique_stocks
-        },
-        'scheme_stats': scheme_stats,
-        'stock_stats': stock_stats,
-        'market_cap_dist': market_cap_dist,
-        'scheme_overlap': scheme_overlap
-    }
+# Function to create conviction gauge
+def create_conviction_gauge(conviction_score, title):
+    """Create a conviction gauge chart"""
+    fig = go.Figure(go.Indicator(
+        mode = "gauge+number+delta",
+        value = conviction_score,
+        domain = {'x': [0, 1], 'y': [0, 1]},
+        title = {'text': title, 'font': {'size': 16}},
+        delta = {'reference': 50},
+        gauge = {
+            'axis': {'range': [None, 100]},
+            'bar': {'color': "darkblue"},
+            'steps': [
+                {'range': [0, 25], 'color': "lightgray"},
+                {'range': [25, 50], 'color': "yellow"},
+                {'range': [50, 100], 'color': "lightgreen"}
+            ],
+            'threshold': {
+                'line': {'color': "red", 'width': 4},
+                'thickness': 0.75,
+                'value': 90
+            }
+        }
+    ))
+    fig.update_layout(height=300)
+    return fig
 
-# Function to create visualizations
-def create_visualizations(analysis_results, df, scheme_col, stock_col):
-    """Create various visualizations"""
+# Function to create enhanced visualizations
+def create_enhanced_visualizations(stock_conviction, df, scheme_col, stock_col, min_schemes):
+    """Create enhanced interactive visualizations"""
     
-    # 1. Scheme-wise Holdings Count
-    scheme_counts = df.groupby(scheme_col).size().reset_index(name='Holdings_Count')
-    fig_scheme_holdings = px.bar(
-        scheme_counts,
-        x='Holdings_Count',
-        y=scheme_col,
-        orientation='h',
-        title="Number of Holdings per Scheme"
-    )
-    fig_scheme_holdings.update_layout(yaxis={'categoryorder': 'total ascending'})
+    # Filter based on minimum schemes
+    filtered_conviction = stock_conviction[stock_conviction['Scheme_Count'] >= min_schemes].copy()
     
-    # 2. Common Stocks Analysis
-    common_stocks = analysis_results['stock_stats'][
-        analysis_results['stock_stats']['Unique_Schemes'] > 1
-    ].head(20)
-    
-    fig_common_stocks = px.bar(
-        common_stocks,
-        x='Unique_Schemes',
+    # 1. High Conviction Stocks Bar Chart
+    fig_conviction = px.bar(
+        filtered_conviction.head(20),
+        x='Conviction_Score',
         y='Stock',
-        orientation='h',
-        title="Top 20 Stocks by Number of Schemes"
+        color='Conviction_Category',
+        title=f"🎯 Top 20 High Conviction Stocks (Min {min_schemes} Schemes)",
+        labels={'Conviction_Score': 'Conviction Score (%)', 'Stock': 'Stock'},
+        color_discrete_map={
+            "🟢 High Conviction": "#38ef7d",
+            "🟡 Medium Conviction": "#f5576c", 
+            "🔵 Low Conviction": "#4facfe"
+        }
     )
-    fig_common_stocks.update_layout(yaxis={'categoryorder': 'total ascending'})
+    fig_conviction.update_layout(yaxis={'categoryorder': 'total ascending'})
     
-    # 3. Holdings distribution
-    holdings_dist = df.groupby(scheme_col).size().reset_index(name='Count')
-    fig_holdings_dist = px.pie(
-        holdings_dist,
-        values='Count',
-        names=scheme_col,
-        title="Holdings Distribution Across Schemes"
+    # 2. Conviction Distribution
+    conviction_dist = filtered_conviction['Conviction_Category'].value_counts()
+    fig_dist = px.pie(
+        values=conviction_dist.values,
+        names=conviction_dist.index,
+        title=f"🎯 Conviction Distribution (Min {min_schemes} Schemes)",
+        color_discrete_map={
+            "🟢 High Conviction": "#38ef7d",
+            "🟡 Medium Conviction": "#f5576c",
+            "🔵 Low Conviction": "#4facfe"
+        }
     )
     
-    return {
-        'scheme_holdings': fig_scheme_holdings,
-        'common_stocks': fig_common_stocks,
-        'holdings_dist': fig_holdings_dist
-    }
+    # 3. Scheme Overlap Heatmap
+    schemes = df[scheme_col].unique()
+    overlap_matrix = pd.DataFrame(index=schemes, columns=schemes)
+    
+    for scheme1 in schemes:
+        stocks1 = set(df[df[scheme_col] == scheme1][stock_col])
+        for scheme2 in schemes:
+            stocks2 = set(df[df[scheme_col] == scheme2][stock_col])
+            overlap = len(stocks1.intersection(stocks2))
+            overlap_matrix.loc[scheme1, scheme2] = overlap
+    
+    overlap_matrix = overlap_matrix.astype(float)
+    
+    fig_heatmap = px.imshow(
+        overlap_matrix,
+        title="🔄 Portfolio Convergence Heatmap",
+        labels=dict(x="Scheme", y="Scheme", color="Common Stocks"),
+        aspect="auto",
+        color_continuous_scale="Viridis"
+    )
+    
+    return fig_conviction, fig_dist, fig_heatmap, filtered_conviction
 
 # Main app logic
 def main():
     # Load data button
-    if st.sidebar.button("Load Consolidated Data", type="primary"):
-        with st.spinner("Loading consolidated data..."):
+    if st.sidebar.button("🚀 Load & Analyze Data", type="primary"):
+        with st.spinner("Loading and analyzing data..."):
             df = load_consolidated_data(google_sheets_url)
             
             if df is not None and not df.empty:
-                # Automatically process the data
-                with st.spinner("Processing data..."):
-                    result = process_consolidated_data_basic(df)
+                result = process_consolidated_data_enhanced(df)
+                
+                if result is not None:
+                    processed_df, scheme_col, stock_col, stock_conviction, total_schemes = result
                     
-                    if result is not None:
-                        processed_df, scheme_col, stock_col = result
-                        st.session_state['processed_data'] = processed_df
-                        st.session_state['scheme_col'] = scheme_col
-                        st.session_state['stock_col'] = stock_col
-                        st.session_state['raw_data'] = df
-                        
-                        st.success(f"✅ Successfully loaded and processed {len(df)} rows from consolidated sheet")
-                        
-                        # Show data preview
-                        st.subheader("📄 Data Preview")
-                        st.dataframe(df.head(10), use_container_width=True)
-                        
-                        # Show column information
-                        st.subheader("📋 Column Information")
-                        col_info = []
-                        for col in df.columns:
-                            col_info.append({
-                                'Column': col,
-                                'Type': str(df[col].dtype),
-                                'Non-Null Count': df[col].notna().sum(),
-                                'Unique Values': df[col].nunique()
-                            })
-                        st.dataframe(pd.DataFrame(col_info), use_container_width=True)
-                        
-                        # Show processing summary
-                        st.subheader("🔄 Processing Summary")
-                        col1, col2, col3 = st.columns(3)
-                        
-                        with col1:
-                            st.metric("Scheme Column", scheme_col)
-                        with col2:
-                            st.metric("Stock Column", stock_col)
-                        with col3:
-                            st.metric("Total Entries", len(processed_df))
-                        
-                        # Automatically trigger rerun to show the dashboard
-                        st.rerun()
-                    else:
-                        st.error("❌ Failed to process data. Please check your data structure.")
+                    # Store in session state
+                    st.session_state['processed_data'] = processed_df
+                    st.session_state['scheme_col'] = scheme_col
+                    st.session_state['stock_col'] = stock_col
+                    st.session_state['stock_conviction'] = stock_conviction
+                    st.session_state['total_schemes'] = total_schemes
+                    st.session_state['raw_data'] = df
+                    
+                    st.success(f"✅ Successfully analyzed {len(df)} holdings across {total_schemes} schemes")
+                    st.rerun()
+                else:
+                    st.error("❌ Failed to process data")
             else:
-                st.error("❌ Failed to load data. Please check your Google Sheets URL.")
+                st.error("❌ Failed to load data")
     
-    # Display analysis if processed data is available
+    # Display enhanced dashboard if data is available
     if 'processed_data' in st.session_state:
         processed_df = st.session_state['processed_data']
         scheme_col = st.session_state['scheme_col']
         stock_col = st.session_state['stock_col']
+        stock_conviction = st.session_state['stock_conviction']
+        total_schemes = st.session_state['total_schemes']
         
-        # Create analysis
-        with st.spinner("Creating comprehensive analysis..."):
-            analysis_results = create_comprehensive_analysis(processed_df, scheme_col, stock_col)
-            visualizations = create_visualizations(analysis_results, processed_df, scheme_col, stock_col)
+        # Interactive Controls
+        st.sidebar.markdown("---")
+        st.sidebar.markdown("### 🎛️ Analysis Controls")
         
-        # Display results in tabs
+        # Conviction threshold slider
+        min_schemes = st.sidebar.slider(
+            "🎯 Minimum Schemes for High Conviction",
+            min_value=2,
+            max_value=min(15, total_schemes),
+            value=min(5, total_schemes),
+            help="Stocks held by at least this many schemes"
+        )
+        
+        # Conviction score threshold
+        min_conviction_score = st.sidebar.slider(
+            "📊 Minimum Conviction Score (%)",
+            min_value=0,
+            max_value=100,
+            value=20,
+            help="Minimum percentage of schemes holding the stock"
+        )
+        
+        # Generate enhanced visualizations
+        fig_conviction, fig_dist, fig_heatmap, filtered_conviction = create_enhanced_visualizations(
+            stock_conviction, processed_df, scheme_col, stock_col, min_schemes
+        )
+        
+        # Dashboard Tabs
         tab1, tab2, tab3, tab4, tab5 = st.tabs([
-            "📊 Overview",
-            "🔍 Scheme Analysis", 
-            "🤝 Common Holdings",
-            "🔄 Cross-Scheme Analysis",
-            "📋 Raw Data"
+            "🏠 Executive Summary",
+            "🎯 High Conviction Picks", 
+            "🔄 Portfolio Convergence",
+            "📈 Concentration Analysis",
+            "📋 Data Explorer"
         ])
         
         with tab1:
-            st.markdown("### 📊 Portfolio Overview")
+            st.markdown("## 🏠 Executive Summary")
             
-            # Summary metrics
+            # Key Metrics
             col1, col2, col3, col4 = st.columns(4)
             
             with col1:
-                st.metric("Total Entries", analysis_results['basic_stats']['total_entries'])
+                st.metric("Total Schemes", total_schemes)
+            
             with col2:
-                st.metric("Unique Schemes", analysis_results['basic_stats']['unique_schemes'])
+                unique_stocks = processed_df[stock_col].nunique()
+                st.metric("Unique Stocks", unique_stocks)
+            
             with col3:
-                st.metric("Unique Stocks", analysis_results['basic_stats']['unique_stocks'])
+                high_conviction_count = len(stock_conviction[stock_conviction['Conviction_Score'] >= 50])
+                st.metric("🟢 High Conviction Stocks", high_conviction_count)
+            
             with col4:
-                common_stocks_count = len(analysis_results['stock_stats'][
-                    analysis_results['stock_stats']['Unique_Schemes'] > 1
-                ])
-                st.metric("Common Stocks", common_stocks_count)
+                avg_conviction = stock_conviction['Conviction_Score'].mean()
+                st.metric("Average Conviction Score", f"{avg_conviction:.1f}%")
             
-            # Holdings distribution
-            st.plotly_chart(visualizations['holdings_dist'], use_container_width=True)
+            # Top insights
+            st.markdown("### 🎯 Key Insights")
             
-            # Scheme holdings
-            st.plotly_chart(visualizations['scheme_holdings'], use_container_width=True)
+            # Top conviction stock
+            top_stock = stock_conviction.iloc[0]
+            st.info(f"**🏆 Top Conviction Stock:** {top_stock['Stock']} held by {top_stock['Scheme_Count']} schemes ({top_stock['Conviction_Score']:.1f}%)")
+            
+            # Conviction distribution
+            st.markdown("### 📊 Conviction Distribution Overview")
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.plotly_chart(fig_dist, use_container_width=True)
+            
+            with col2:
+                # Top 5 conviction stocks gauge
+                st.markdown("#### 🎯 Top 5 Conviction Scores")
+                for i in range(min(5, len(stock_conviction))):
+                    stock = stock_conviction.iloc[i]
+                    progress_color = "🟢" if stock['Conviction_Score'] >= 50 else "🟡" if stock['Conviction_Score'] >= 25 else "🔵"
+                    st.write(f"{progress_color} **{stock['Stock']}**: {stock['Conviction_Score']:.1f}%")
+                    st.progress(stock['Conviction_Score'] / 100)
         
         with tab2:
-            st.markdown("### 🔍 Individual Scheme Analysis")
+            st.markdown("## 🎯 High Conviction Analysis")
             
-            # Scheme selector
-            selected_scheme = st.selectbox(
-                "Select a scheme to analyze:",
-                processed_df[scheme_col].unique()
-            )
+            # Filter controls
+            col1, col2 = st.columns(2)
             
-            if selected_scheme:
-                scheme_data = processed_df[processed_df[scheme_col] == selected_scheme]
-                
-                # Scheme metrics
-                col1, col2, col3 = st.columns(3)
-                
-                with col1:
-                    st.metric("Total Holdings", len(scheme_data))
-                with col2:
-                    st.metric("Unique Stocks", scheme_data[stock_col].nunique())
-                with col3:
-                    # Count how many of this scheme's stocks appear in other schemes
-                    scheme_stocks = set(scheme_data[stock_col])
-                    other_schemes_stocks = set(processed_df[processed_df[scheme_col] != selected_scheme][stock_col])
-                    common_with_others = len(scheme_stocks.intersection(other_schemes_stocks))
-                    st.metric("Stocks in Other Schemes", common_with_others)
-                
-                # Holdings table
-                st.markdown("#### Holdings Details")
-                st.dataframe(scheme_data, use_container_width=True)
-        
-        with tab3:
-            st.markdown("### 🤝 Common Holdings Analysis")
+            with col1:
+                st.markdown(f"**Showing stocks held by ≥{min_schemes} schemes**")
             
-            # Common stocks visualization
-            st.plotly_chart(visualizations['common_stocks'], use_container_width=True)
+            with col2:
+                st.markdown(f"**Conviction Score ≥{min_conviction_score}%**")
             
-            # Detailed common stocks table
-            common_stocks_df = analysis_results['stock_stats'][
-                analysis_results['stock_stats']['Unique_Schemes'] > 1
+            # Apply conviction score filter
+            display_conviction = filtered_conviction[
+                filtered_conviction['Conviction_Score'] >= min_conviction_score
             ].copy()
             
-            if not common_stocks_df.empty:
-                st.markdown("#### Common Stocks Details")
-                
-                # Expand scheme lists for better readability
-                common_stocks_df['Schemes'] = common_stocks_df['Scheme_List'].apply(
-                    lambda x: ', '.join(x) if isinstance(x, list) else str(x)
-                )
-                
-                display_df = common_stocks_df[['Stock', 'Unique_Schemes', 'Schemes']]
-                st.dataframe(display_df, use_container_width=True)
-            else:
-                st.info("No common stocks found across schemes.")
-        
-        with tab4:
-            st.markdown("### 🔄 Cross-Scheme Analysis")
+            # High conviction chart
+            st.plotly_chart(fig_conviction, use_container_width=True)
             
-            # Stock overlap heatmap
-            st.markdown("#### Stock Overlap Between Schemes")
+            # Detailed conviction table
+            st.markdown("### 📋 Detailed Conviction Analysis")
             
-            # Create overlap matrix
-            schemes = processed_df[scheme_col].unique()
-            overlap_matrix = pd.DataFrame(index=schemes, columns=schemes)
-            
-            for scheme1 in schemes:
-                stocks1 = set(processed_df[processed_df[scheme_col] == scheme1][stock_col])
-                for scheme2 in schemes:
-                    stocks2 = set(processed_df[processed_df[scheme_col] == scheme2][stock_col])
-                    overlap = len(stocks1.intersection(stocks2))
-                    overlap_matrix.loc[scheme1, scheme2] = overlap
-            
-            # Convert to numeric
-            overlap_matrix = overlap_matrix.astype(float)
-            
-            # Create heatmap
-            fig_heatmap = px.imshow(
-                overlap_matrix,
-                title="Stock Overlap Matrix Between Schemes",
-                labels=dict(x="Scheme", y="Scheme", color="Common Stocks"),
-                aspect="auto"
+            # Prepare display dataframe
+            display_df = display_conviction.copy()
+            display_df['Schemes'] = display_df['Schemes_List'].apply(
+                lambda x: ', '.join(x) if isinstance(x, list) else str(x)
             )
+            
+            # Style the dataframe
+            def style_conviction(val):
+                if "🟢" in val:
+                    return 'background-color: #38ef7d; color: white'
+                elif "🟡" in val:
+                    return 'background-color: #f5576c; color: white'
+                else:
+                    return 'background-color: #4facfe; color: white'
+            
+            styled_df = display_df[['Stock', 'Scheme_Count', 'Conviction_Score', 'Conviction_Category', 'Schemes']].style.applymap(
+                style_conviction, subset=['Conviction_Category']
+            )
+            
+            st.dataframe(styled_df, use_container_width=True)
+            
+            # Download high conviction picks
+            if not display_df.empty:
+                csv = display_df.to_csv(index=False)
+                st.download_button(
+                    label="📥 Download High Conviction Picks",
+                    data=csv,
+                    file_name=f"high_conviction_picks_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv"
+                )
+        
+        with tab3:
+            st.markdown("## 🔄 Portfolio Convergence Analysis")
+            
+            # Convergence heatmap
             st.plotly_chart(fig_heatmap, use_container_width=True)
             
-            # Overlap statistics
-            st.markdown("#### Overlap Statistics")
-            overlap_stats = []
+            # Convergence statistics
+            st.markdown("### 📊 Convergence Statistics")
+            
+            # Calculate convergence metrics
+            schemes = processed_df[scheme_col].unique()
+            convergence_stats = []
+            
             for i, scheme1 in enumerate(schemes):
                 for j, scheme2 in enumerate(schemes):
-                    if i < j:  # Only upper triangle
-                        overlap = overlap_matrix.loc[scheme1, scheme2]
-                        overlap_stats.append({
+                    if i < j:
+                        stocks1 = set(processed_df[processed_df[scheme_col] == scheme1][stock_col])
+                        stocks2 = set(processed_df[processed_df[scheme_col] == scheme2][stock_col])
+                        
+                        common_stocks = len(stocks1.intersection(stocks2))
+                        total_unique = len(stocks1.union(stocks2))
+                        
+                        # Jaccard similarity
+                        jaccard_similarity = (common_stocks / total_unique * 100) if total_unique > 0 else 0
+                        
+                        convergence_stats.append({
                             'Scheme 1': scheme1,
                             'Scheme 2': scheme2,
-                            'Common Stocks': int(overlap)
+                            'Common Stocks': common_stocks,
+                            'Convergence Score': round(jaccard_similarity, 1)
                         })
             
-            overlap_stats_df = pd.DataFrame(overlap_stats).sort_values('Common Stocks', ascending=False)
-            st.dataframe(overlap_stats_df, use_container_width=True)
+            convergence_df = pd.DataFrame(convergence_stats).sort_values('Convergence Score', ascending=False)
+            
+            # Top convergent pairs
+            st.markdown("#### 🤝 Most Convergent Scheme Pairs")
+            top_convergent = convergence_df.head(10)
+            
+            for _, row in top_convergent.iterrows():
+                score = row['Convergence Score']
+                color = "🟢" if score >= 50 else "🟡" if score >= 25 else "🔵"
+                st.write(f"{color} **{row['Scheme 1']}** ↔ **{row['Scheme 2']}**: {score}% similarity ({row['Common Stocks']} common stocks)")
+        
+        with tab4:
+            st.markdown("## 📈 Concentration Analysis")
+            
+            # Scheme-wise concentration
+            st.markdown("### 🎯 Scheme-wise Holdings Concentration")
+            
+            scheme_holdings = processed_df.groupby(scheme_col).size().reset_index(name='Holdings_Count')
+            scheme_holdings = scheme_holdings.sort_values('Holdings_Count', ascending=False)
+            
+            fig_concentration = px.bar(
+                scheme_holdings,
+                x='Holdings_Count',
+                y=scheme_col,
+                orientation='h',
+                title="📊 Holdings Count by Scheme",
+                labels={'Holdings_Count': 'Number of Holdings', scheme_col: 'Scheme'}
+            )
+            fig_concentration.update_layout(yaxis={'categoryorder': 'total ascending'})
+            
+            st.plotly_chart(fig_concentration, use_container_width=True)
+            
+            # Concentration metrics
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("#### 📊 Concentration Metrics")
+                avg_holdings = scheme_holdings['Holdings_Count'].mean()
+                max_holdings = scheme_holdings['Holdings_Count'].max()
+                min_holdings = scheme_holdings['Holdings_Count'].min()
+                
+                st.metric("Average Holdings per Scheme", f"{avg_holdings:.1f}")
+                st.metric("Maximum Holdings", max_holdings)
+                st.metric("Minimum Holdings", min_holdings)
+            
+            with col2:
+                st.markdown("#### 🎯 Risk Assessment")
+                
+                # Calculate concentration risk
+                high_concentration_schemes = scheme_holdings[scheme_holdings['Holdings_Count'] > avg_holdings * 1.5]
+                low_concentration_schemes = scheme_holdings[scheme_holdings['Holdings_Count'] < avg_holdings * 0.5]
+                
+                if not high_concentration_schemes.empty:
+                    st.warning(f"⚠️ {len(high_concentration_schemes)} schemes have high concentration (>{avg_holdings*1.5:.0f} holdings)")
+                
+                if not low_concentration_schemes.empty:
+                    st.info(f"ℹ️ {len(low_concentration_schemes)} schemes have low concentration (<{avg_holdings*0.5:.0f} holdings)")
         
         with tab5:
-            st.markdown("### 📋 Raw Data")
+            st.markdown("## 📋 Data Explorer")
             
-            # Filters
-            st.markdown("#### Filters")
-            col1, col2 = st.columns(2)
+            # Advanced filters
+            st.markdown("### 🔍 Advanced Filters")
+            
+            col1, col2, col3 = st.columns(3)
             
             with col1:
                 scheme_filter = st.multiselect(
@@ -403,79 +497,84 @@ def main():
                 )
             
             with col2:
-                if stock_col in processed_df.columns:
-                    stock_filter = st.multiselect(
-                        "Filter by Stock:",
-                        processed_df[stock_col].unique()[:50],  # Limit to first 50 for performance
-                        default=[]
-                    )
-                else:
-                    stock_filter = []
+                stock_filter = st.multiselect(
+                    "Filter by Stock:",
+                    processed_df[stock_col].unique()[:50],
+                    default=[]
+                )
+            
+            with col3:
+                conviction_filter = st.selectbox(
+                    "Filter by Conviction:",
+                    ["All", "🟢 High Conviction", "🟡 Medium Conviction", "🔵 Low Conviction"],
+                    index=0
+                )
             
             # Apply filters
             filtered_df = processed_df.copy()
+            
             if scheme_filter:
                 filtered_df = filtered_df[filtered_df[scheme_col].isin(scheme_filter)]
+            
             if stock_filter:
                 filtered_df = filtered_df[filtered_df[stock_col].isin(stock_filter)]
             
+            if conviction_filter != "All":
+                conviction_stocks = stock_conviction[
+                    stock_conviction['Conviction_Category'] == conviction_filter
+                ]['Stock'].tolist()
+                filtered_df = filtered_df[filtered_df[stock_col].isin(conviction_stocks)]
+            
             # Display filtered data
-            st.markdown(f"#### Filtered Data ({len(filtered_df)} rows)")
+            st.markdown(f"### 📊 Filtered Data ({len(filtered_df)} rows)")
             st.dataframe(filtered_df, use_container_width=True)
             
-            # Download button
-            csv = filtered_df.to_csv(index=False)
-            st.download_button(
-                label="Download Filtered Data as CSV",
-                data=csv,
-                file_name=f"mutual_fund_analysis_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                mime="text/csv"
-            )
+            # Download filtered data
+            if not filtered_df.empty:
+                csv = filtered_df.to_csv(index=False)
+                st.download_button(
+                    label="📥 Download Filtered Data",
+                    data=csv,
+                    file_name=f"filtered_analysis_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv"
+                )
     
     else:
-        st.info("👆 Please load your consolidated data using the sidebar button.")
+        # Welcome screen
+        st.markdown("## 🚀 Welcome to Smart Mutual Fund Analysis")
         
-        # Instructions
-        st.subheader("📖 Instructions")
-        st.markdown("""
-        ## How to Use This Dashboard
+        st.info("👆 Click **'Load & Analyze Data'** in the sidebar to begin analysis")
         
-        1. **Enter Google Sheets URL**: Paste your consolidated sheet URL in the sidebar
-        2. **Load Data**: Click 'Load Consolidated Data' to import and automatically process your data
-        3. **Explore Analysis**: Navigate through different tabs for comprehensive analysis
+        # Feature highlights
+        st.markdown("### ✨ Key Features")
         
-        ## Expected Data Format
-        Your consolidated sheet should have:
-        - **First column**: Scheme/Fund names
-        - **Second column**: Stock/Company names  
-        - **Additional columns**: Any other relevant data (holdings %, sector, etc.)
+        col1, col2 = st.columns(2)
         
-        ## Features
-        - ✅ **Automatic processing** - No manual steps required
-        - ✅ **Automatic column detection** for schemes and stocks
-        - ✅ **Cross-scheme analysis** and overlap detection
-        - ✅ **Interactive visualizations** with filtering capabilities
-        - ✅ **Data export** functionality
-        - ✅ **Comprehensive statistics** and insights
+        with col1:
+            st.markdown("""
+            **🎯 High Conviction Analysis**
+            - Dynamic threshold controls
+            - Conviction scoring system
+            - Color-coded insights
+            
+            **🔄 Portfolio Convergence**
+            - Scheme similarity analysis
+            - Interactive heatmaps
+            - Convergence scoring
+            """)
         
-        ## Sample Analysis Includes
-        - Portfolio overview with key metrics
-        - Individual scheme analysis
-        - Common holdings identification
-        - Cross-scheme overlap heatmap
-        - Raw data with filtering options
-        
-        **Note**: Market cap analysis has been disabled for faster processing. Data loads automatically after clicking 'Load Consolidated Data'.
-        """)
-
-# Optional: Add market cap fetching as a separate feature
-if 'processed_data' in st.session_state:
-    st.sidebar.markdown("---")
-    st.sidebar.markdown("### Optional Features")
-    
-    if st.sidebar.button("🔍 Fetch Market Cap Data", help="This will take time as it fetches market cap for each stock"):
-        # Here you can add the market cap fetching logic if needed
-        st.sidebar.info("Market cap fetching feature can be added here if needed")
+        with col2:
+            st.markdown("""
+            **📈 Concentration Analysis**
+            - Risk assessment metrics
+            - Holdings distribution
+            - Automated alerts
+            
+            **📊 Interactive Dashboard**
+            - Real-time filtering
+            - Export capabilities
+            - Mobile-friendly design
+            """)
 
 if __name__ == "__main__":
     main()
