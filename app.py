@@ -42,7 +42,7 @@ st.sidebar.header("🎛️ Dashboard Controls")
 # Google Sheets URL input
 google_sheets_url = st.sidebar.text_input(
     "📊 Google Sheets URL",
-    value="https://docs.google.com/spreadsheets/d/1lXMwJBjmCTKA8RK81fzDwty5IvjQhaDGCZDRkeSqxZc/edit?gid=1477439265#gid=1477439265",
+    value="https://docs.google.com/spreadsheets/d/1lXMwJBjmCTKA8RK81fzDwty5IvjQhaDGCZDRkeSqxZc/edit?gid=406771018#gid=406771018",
     help="Enter the URL of your consolidated Google Sheet"
 )
 
